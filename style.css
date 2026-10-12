@@ -1,0 +1,112 @@
+/* ==================== Veilweaver ==================== */
+
+:root {
+    --vlw-accent: var(--SmartThemeQuoteColor, #6aa9ff);
+    --vlw-fg: var(--SmartThemeBodyColor, #e6e6e6);
+    --vlw-border: var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.14));
+    --vlw-muted: color-mix(in srgb, var(--vlw-fg) 62%, transparent);
+}
+
+/* ---------- Сама вуаль ----------
+   Селекторы картинок продублированы в index.js (VEIL_SELECTOR) — меняются парой. */
+
+#chat .mes_text img.iig-generated-image,
+#chat .mes_text img[data-iig-instruction],
+#sdw_image {
+    transition: filter 180ms ease;
+}
+
+body.vlw-on #chat .mes_text img.iig-generated-image:not(.iig-error-image):not([src*="error.svg"]),
+body.vlw-on #chat .mes_text img[data-iig-instruction]:not(.iig-error-image):not([src*="error.svg"]),
+body.vlw-on #sdw_image {
+    filter: blur(var(--vlw-blur, 28px)) brightness(var(--vlw-dim, 0.45));
+    cursor: default;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    #chat .mes_text img.iig-generated-image,
+    #chat .mes_text img[data-iig-instruction],
+    #sdw_image {
+        transition: none;
+    }
+}
+
+/* ---------- Панель настроек ---------- */
+
+.vlw-settings .vlw-card {
+    margin-top: 6px;
+    padding: 12px;
+    color: var(--vlw-fg);
+    border: 1px solid var(--vlw-border);
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--vlw-accent) 6%, transparent);
+}
+
+.vlw-settings .vlw-row,
+.vlw-settings .vlw-range {
+    display: flex;
+    gap: 12px;
+    padding: 10px 12px;
+    margin-bottom: 8px;
+    border: 1px solid var(--vlw-border);
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.04);
+}
+
+.vlw-settings .vlw-row {
+    align-items: center;
+    cursor: pointer;
+}
+
+.vlw-settings .vlw-copy {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.vlw-settings strong {
+    font-size: 0.9em;
+    font-weight: 600;
+}
+
+.vlw-settings small,
+.vlw-settings .vlw-hint {
+    font-size: 0.78em;
+    line-height: 1.45;
+    color: var(--vlw-muted);
+}
+
+.vlw-settings input[type="checkbox"] {
+    flex: 0 0 auto;
+    width: 17px;
+    height: 17px;
+    accent-color: var(--vlw-accent);
+}
+
+.vlw-settings .vlw-range {
+    flex-direction: column;
+    gap: 6px;
+}
+
+.vlw-settings .vlw-range-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.vlw-settings output {
+    color: var(--vlw-accent);
+    font-size: 0.8em;
+    font-variant-numeric: tabular-nums;
+}
+
+.vlw-settings input[type="range"] {
+    width: 100%;
+    accent-color: var(--vlw-accent);
+}
+
+.vlw-settings .vlw-hint {
+    margin: 2px 0 0;
+}
