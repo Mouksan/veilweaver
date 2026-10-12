@@ -2,10 +2,15 @@
  * Veilweaver — вуаль для сгенерированных картинок Frameweaver и Sideweaver.
  * Форк ST-ImageBlur (Nufahi), переписанный так, чтобы не вешать таверну.
  *
- * Принцип: блюр делает CSS по классу на <body>. Сами картинки, их обёртки и
- * классы мы не трогаем вообще — значит, нам не с кем зацикливаться.
+ * Принципы:
+ *  - Блюр делает CSS по классу на <body>. Сами картинки и их классы мы не трогаем.
+ *  - Открытые картинки — это правила в нашем <style> в <head> (по адресу картинки),
+ *    клик по глазу меняет только его текст. В чат при этом не пишется ничего.
+ *  - Единственная запись в чужой DOM — кнопка-глаз, один раз на обёртку и только
+ *    если её там ещё нет. Поэтому повторный проход ничего не меняет и зациклиться не может.
  *
  * Этап 1: настройки, панель, CSS-блюр, глушение кликов по мутным картинкам.
+ * Этап 2: глазики во Фрейме и Сайде, память открытых картинок до перезагрузки.
  */
 (function () {
     'use strict';
@@ -13,6 +18,8 @@
     const SETTINGS_KEY = 'veilweaver';
     const LOG = '[Veilweaver]';
     const BODY_CLASS = 'vlw-on';
+    const EYE_CLASS = 'vlw-eye';
+    const REVEALED_STYLE_ID = 'vlw_revealed_style';
 
     // Картинки под вуалью. Те же селекторы продублированы в style.css — меняются парой.
     const VEIL_SELECTOR = [
@@ -20,6 +27,10 @@
         '#chat .mes_text img[data-iig-instruction]:not(.iig-error-image):not([src*="error.svg"])',
         '#sdw_image',
     ].join(', ');
+
+    // Обёртки, куда садится глаз.
+    const FW_WRAPPER = '#chat .iig-image-wrapper:not(.iig-placeholder-wrapper)';
+    const SDW_WRAPPER = '#sdw_image_wrap';
 
     // Кнопка «развернуть» Фрейма — у мутной картинки её глушим.
     const FW_VIEW_BUTTON = '#chat .iig-image-wrapper .iig-action-view';
@@ -32,6 +43,11 @@
         || ('ontouchstart' in window && navigator.maxTouchPoints > 0);
     const FW_TAP_MODE = IS_MOBILE || !!window.matchMedia?.('(hover: none), (pointer: coarse)')?.matches;
 
+    const TEXT = {
+        reveal: 'Показать картинку',
+        hide: 'Спрятать картинку',
+    };
+
     const DEFAULTS = Object.freeze({ enabled: true, blur: 28, dim: 45 });
     const BLUR_RANGE = [8, 50];
     const DIM_RANGE = [20, 100];
@@ -40,6 +56,13 @@
 
     const ctx = () => window.SillyTavern?.getContext?.();
     const clamp = (value, [min, max], fallback) => (Number.isFinite(value) ? Math.min(max, Math.max(min, value)) : fallback);
+
+    /** Адреса открытых картинок. Живут только в памяти вкладки — F5, и всё снова мутное. */
+    const revealed = new Set();
+    let observer = null;
+    let passScheduled = false;
+
+    // ───────────────────────────── Настройки ─────────────────────────────
 
     function settings() {
         const store = ctx()?.extensionSettings;
@@ -55,18 +78,141 @@
         ctx()?.saveSettingsDebounced?.();
     }
 
-    /** Единственное место, которое что-то пишет в DOM ради блюра: класс и переменные на <body>. */
+    // ───────────────────────────── Вуаль ─────────────────────────────
+
+    /** Класс и переменные на <body> + включение/выключение наблюдателя. */
     function applyVeil() {
         const state = settings();
         const body = document.body;
         body.style.setProperty('--vlw-blur', `${state.blur}px`);
         body.style.setProperty('--vlw-dim', String(state.dim / 100));
         if (body.classList.contains(BODY_CLASS) !== state.enabled) body.classList.toggle(BODY_CLASS, state.enabled);
+        if (state.enabled) startWatching();
+        else stopWatching();
+    }
+
+    function imageKey(image) {
+        return image?.getAttribute('src') || '';
     }
 
     function isVeiled(image) {
-        return settings().enabled && image instanceof HTMLImageElement && image.matches(VEIL_SELECTOR);
+        return settings().enabled
+            && image instanceof HTMLImageElement
+            && image.matches(VEIL_SELECTOR)
+            && !revealed.has(imageKey(image));
     }
+
+    /**
+     * Пересобирает правила «вот эти адреса не мутить».
+     * Два :not(#…) поднимают специфичность выше правила вуали из style.css.
+     */
+    function renderRevealedStyle() {
+        let style = document.getElementById(REVEALED_STYLE_ID);
+        if (!style) {
+            style = document.createElement('style');
+            style.id = REVEALED_STYLE_ID;
+            document.head.appendChild(style);
+        }
+        const boost = ':not(#vlw-a):not(#vlw-b)';
+        style.textContent = [...revealed].map((src) => {
+            const attr = `[src="${CSS.escape(src)}"]`;
+            return `body.${BODY_CLASS} img${attr}${boost} { filter: none !important; cursor: zoom-in; }
+:is(.iig-image-wrapper, #sdw_image_wrap):has(> img${attr}) > .${EYE_CLASS} .vlw-ico-reveal { display: none; }
+:is(.iig-image-wrapper, #sdw_image_wrap):has(> img${attr}) > .${EYE_CLASS} .vlw-ico-hide { display: inline-block; }`;
+        }).join('\n');
+    }
+
+    // ───────────────────────────── Глазики ─────────────────────────────
+
+    function eyeLabel(image) {
+        return revealed.has(imageKey(image)) ? TEXT.hide : TEXT.reveal;
+    }
+
+    function createEye(extraClass) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = `${EYE_CLASS} ${extraClass}`;
+        button.innerHTML = '<i class="fa-solid fa-eye vlw-ico-reveal" aria-hidden="true"></i><i class="fa-solid fa-eye-slash vlw-ico-hide" aria-hidden="true"></i>';
+        return button;
+    }
+
+    function setEyeLabel(button, image) {
+        const label = eyeLabel(image);
+        if (button.title !== label) {
+            button.title = label;
+            button.setAttribute('aria-label', label);
+        }
+    }
+
+    /** Вставляет глаз туда, где его нет. Где есть — не трогает (идемпотентно). */
+    function ensureEyes() {
+        passScheduled = false;
+        if (!settings().enabled) return;
+
+        for (const wrapper of document.querySelectorAll(FW_WRAPPER)) {
+            if (wrapper.querySelector(`:scope > .${EYE_CLASS}`)) continue;
+            const image = wrapper.querySelector(':scope > img');
+            if (!image || !image.matches(VEIL_SELECTOR)) continue;
+            const eye = createEye('iig-action-btn vlw-eye-fw');
+            setEyeLabel(eye, image);
+            wrapper.appendChild(eye);
+        }
+
+        const sdwWrap = document.querySelector(SDW_WRAPPER);
+        if (sdwWrap && !sdwWrap.querySelector(`:scope > .${EYE_CLASS}`)) {
+            const eye = createEye('vlw-eye-sdw');
+            setEyeLabel(eye, sdwWrap.querySelector(':scope > img'));
+            sdwWrap.appendChild(eye);
+        }
+    }
+
+    function schedulePass() {
+        if (passScheduled) return;
+        passScheduled = true;
+        requestAnimationFrame(ensureEyes);
+    }
+
+    const isOwnNode = (node) => node instanceof Element && (node.classList.contains(EYE_CLASS) || !!node.closest(`.${EYE_CLASS}`));
+
+    function onMutations(records) {
+        for (const record of records) {
+            for (const node of record.addedNodes) {
+                if (node instanceof Element && !isOwnNode(node)) {
+                    schedulePass();
+                    return;
+                }
+            }
+        }
+    }
+
+    /** Наблюдаем только когда вуаль включена: дома расширение вообще ничего не делает. */
+    function startWatching() {
+        if (!observer) {
+            observer = new MutationObserver(onMutations);
+            const chat = document.getElementById('chat');
+            if (chat) observer.observe(chat, { childList: true, subtree: true });
+            // Окно Сайда вставляется прямо в <body> — ловим его появление без subtree.
+            observer.observe(document.body, { childList: true });
+        }
+        schedulePass();
+    }
+
+    function stopWatching() {
+        observer?.disconnect();
+        observer = null;
+    }
+
+    function toggleImage(button) {
+        const image = button.parentElement?.querySelector(':scope > img');
+        const key = imageKey(image);
+        if (!key) return;
+        if (revealed.has(key)) revealed.delete(key);
+        else revealed.add(key);
+        renderRevealedStyle();
+        setEyeLabel(button, image);
+    }
+
+    // ───────────────────────────── Клики ─────────────────────────────
 
     function swallow(event) {
         event.preventDefault();
@@ -74,12 +220,19 @@
     }
 
     /**
-     * Клик по мутной картинке не должен открыть её на весь экран.
      * Слушаем window в фазе захвата — раньше и Фрейма (#chat), и Сайда (сама картинка).
+     * Глаз: открыть/спрятать. Мутная картинка: на весь экран не открывается.
      */
     function onClickCapture(event) {
         if (!settings().enabled || !(event.target instanceof Element)) return;
         const target = event.target;
+
+        const eye = target.closest(`.${EYE_CLASS}`);
+        if (eye) {
+            swallow(event);
+            toggleImage(eye);
+            return;
+        }
 
         const viewButton = target.closest(FW_VIEW_BUTTON);
         if (viewButton) {
@@ -92,6 +245,8 @@
         if (target.id === 'sdw_image') return swallow(event);
         if (!FW_TAP_MODE) swallow(event);
     }
+
+    // ───────────────────────────── Панель ─────────────────────────────
 
     function settingsHtml(state) {
         return `
@@ -152,8 +307,11 @@
         return true;
     }
 
+    // ───────────────────────────── Старт ─────────────────────────────
+
     function init() {
         settings();
+        renderRevealedStyle();
         applyVeil();
 
         let settingsTimer = null;
@@ -164,10 +322,13 @@
 
         window.__veilweaverDispose = () => {
             clearInterval(settingsTimer);
+            stopWatching();
             window.removeEventListener('click', onClickCapture, true);
             document.body.classList.remove(BODY_CLASS);
             document.body.style.removeProperty('--vlw-blur');
             document.body.style.removeProperty('--vlw-dim');
+            document.getElementById(REVEALED_STYLE_ID)?.remove();
+            document.querySelectorAll(`.${EYE_CLASS}`).forEach((eye) => eye.remove());
             document.getElementById('vlw_settings')?.remove();
             delete window.__veilweaverDispose;
         };
