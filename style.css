@@ -19,7 +19,8 @@
 body.vlw-on #chat .mes_text img.iig-generated-image:not(.iig-error-image):not([src*="error.svg"]),
 body.vlw-on #chat .mes_text img[data-iig-instruction]:not(.iig-error-image):not([src*="error.svg"]),
 body.vlw-on #sdw_image {
-    filter: blur(var(--vlw-blur, 28px)) brightness(var(--vlw-dim, 0.45));
+    /* !important: в живой таверне чей-то CSS перебивал блюр на картинках Фрейма. */
+    filter: blur(var(--vlw-blur, 28px)) brightness(var(--vlw-dim, 0.45)) !important;
     cursor: default;
 }
 

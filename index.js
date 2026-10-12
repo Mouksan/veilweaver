@@ -106,7 +106,7 @@
                             <label class="vlw-row">
                                 <span class="vlw-copy">
                                     <strong>Вуаль</strong>
-                                    <small>Прятать сгенерированные картинки Фрейма и Сайда под блюр.</small>
+                                    <small>Прятать сгенерированные картинки под блюр.</small>
                                 </span>
                                 <input id="vlw_enabled" type="checkbox" ${state.enabled ? 'checked' : ''}>
                             </label>
@@ -118,7 +118,7 @@
                                 <span class="vlw-range-head"><strong>Яркость скрытой картинки</strong><output id="vlw_dim_value">${state.dim} %</output></span>
                                 <input id="vlw_dim" type="range" min="${DIM_RANGE[0]}" max="${DIM_RANGE[1]}" step="5" value="${state.dim}">
                             </label>
-                            <p class="vlw-hint"><i class="fa-solid fa-circle-info"></i> Глазик в левом нижнем углу картинки открывает и прячет её. Открытые картинки помнятся до перезагрузки страницы.</p>
+                            <p class="vlw-hint"><i class="fa-solid fa-circle-info"></i> Глазик в левом нижнем углу картинки открывает и прячет её. Открытые картинки помнятся до перезагрузки страницы. Работает с Frameweaver и Sideweaver.</p>
                         </div>
                     </div>
                 </div>
