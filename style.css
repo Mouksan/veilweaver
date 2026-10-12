@@ -123,6 +123,18 @@ body:not(.vlw-on) .vlw-eye {
     }
 }
 
+/* ---------- Палочка ---------- */
+
+#vlw_wand_toggle input[type="checkbox"] {
+    margin: 0 0 0 auto;
+    pointer-events: none; /* переключает весь пункт, не сама галочка */
+    accent-color: var(--vlw-accent);
+}
+
+body:not(.vlw-on) #vlw_wand_hide_all {
+    display: none;
+}
+
 /* ---------- Панель настроек ---------- */
 
 .vlw-settings .vlw-card {

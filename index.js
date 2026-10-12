@@ -11,6 +11,7 @@
  *
  * Этап 1: настройки, панель, CSS-блюр, глушение кликов по мутным картинкам.
  * Этап 2: глазики во Фрейме и Сайде, память открытых картинок до перезагрузки.
+ * Этап 3: пункты в меню палочки, предохранитель от зацикливания.
  */
 (function () {
     'use strict';
@@ -46,7 +47,18 @@
     const TEXT = {
         reveal: 'Показать картинку',
         hide: 'Спрятать картинку',
+        wandToggle: 'Вуаль',
+        wandHideAll: 'Спрятать всё обратно',
+        fuseTitle: 'Veilweaver',
+        fuseBody: 'Вуаль поймала зацикливание и остановилась. Перезагрузи страницу.',
     };
+
+    // Предохранитель. Нормальная жизнь: глаз вставляется в новую обёртку один раз.
+    // Зацикливание: кто-то раз за разом сносит наш глаз из ТОЙ ЖЕ обёртки, или вставки
+    // идут лавиной. Пороги с большим запасом — чат на 200 картинок даёт одну вставку на обёртку.
+    const FUSE_WINDOW_MS = 3000;
+    const FUSE_SAME_WRAPPER = 5;
+    const FUSE_TOTAL = 1500;
 
     const DEFAULTS = Object.freeze({ enabled: true, blur: 28, dim: 45 });
     const BLUR_RANGE = [8, 50];
@@ -61,6 +73,10 @@
     const revealed = new Set();
     let observer = null;
     let passScheduled = false;
+    let fuseTripped = false;
+    let fuseWindowStart = 0;
+    let fuseTotal = 0;
+    const reinserts = new WeakMap(); // обёртка → { count, since }
 
     // ───────────────────────────── Настройки ─────────────────────────────
 
@@ -144,15 +160,40 @@
         }
     }
 
+    /** Считает вставку; true — пора выбивать пробки. */
+    function fuseCount(wrapper) {
+        const now = performance.now();
+        if (now - fuseWindowStart > FUSE_WINDOW_MS) {
+            fuseWindowStart = now;
+            fuseTotal = 0;
+        }
+        fuseTotal++;
+        const entry = reinserts.get(wrapper);
+        if (!entry || now - entry.since > FUSE_WINDOW_MS) {
+            reinserts.set(wrapper, { count: 1, since: now });
+            return fuseTotal > FUSE_TOTAL;
+        }
+        entry.count++;
+        return entry.count > FUSE_SAME_WRAPPER || fuseTotal > FUSE_TOTAL;
+    }
+
+    function tripFuse(wrapper) {
+        fuseTripped = true;
+        stopWatching();
+        console.warn(`${LOG} предохранитель: глаз приходится вставлять снова и снова, наблюдатель остановлен.`, wrapper);
+        window.toastr?.warning?.(TEXT.fuseBody, TEXT.fuseTitle, { timeOut: 10000 });
+    }
+
     /** Вставляет глаз туда, где его нет. Где есть — не трогает (идемпотентно). */
     function ensureEyes() {
         passScheduled = false;
-        if (!settings().enabled) return;
+        if (!settings().enabled || fuseTripped) return;
 
         for (const wrapper of document.querySelectorAll(FW_WRAPPER)) {
             if (wrapper.querySelector(`:scope > .${EYE_CLASS}`)) continue;
             const image = wrapper.querySelector(':scope > img');
             if (!image || !image.matches(VEIL_SELECTOR)) continue;
+            if (fuseCount(wrapper)) return tripFuse(wrapper);
             const eye = createEye('iig-action-btn vlw-eye-fw');
             setEyeLabel(eye, image);
             wrapper.appendChild(eye);
@@ -160,6 +201,7 @@
 
         const sdwWrap = document.querySelector(SDW_WRAPPER);
         if (sdwWrap && !sdwWrap.querySelector(`:scope > .${EYE_CLASS}`)) {
+            if (fuseCount(sdwWrap)) return tripFuse(sdwWrap);
             const eye = createEye('vlw-eye-sdw');
             setEyeLabel(eye, sdwWrap.querySelector(':scope > img'));
             sdwWrap.appendChild(eye);
@@ -187,6 +229,7 @@
 
     /** Наблюдаем только когда вуаль включена: дома расширение вообще ничего не делает. */
     function startWatching() {
+        if (fuseTripped) return;
         if (!observer) {
             observer = new MutationObserver(onMutations);
             const chat = document.getElementById('chat');
@@ -200,6 +243,29 @@
     function stopWatching() {
         observer?.disconnect();
         observer = null;
+    }
+
+    /** Общий выключатель — для панели и для палочки. */
+    function setEnabled(enabled) {
+        settings().enabled = enabled;
+        save();
+        applyVeil();
+        syncToggles();
+    }
+
+    function syncToggles() {
+        const enabled = settings().enabled;
+        const panelBox = document.getElementById('vlw_enabled');
+        if (panelBox && panelBox.checked !== enabled) panelBox.checked = enabled;
+        const wandBox = document.getElementById('vlw_wand_checkbox');
+        if (wandBox && wandBox.checked !== enabled) wandBox.checked = enabled;
+    }
+
+    function hideAll() {
+        if (!revealed.size) return;
+        revealed.clear();
+        renderRevealedStyle();
+        document.querySelectorAll(`.${EYE_CLASS}`).forEach((eye) => setEyeLabel(eye, eye.parentElement?.querySelector(':scope > img')));
     }
 
     function toggleImage(button) {
@@ -287,11 +353,7 @@
         host.insertAdjacentHTML('beforeend', settingsHtml(settings()));
         const panel = document.getElementById('vlw_settings');
 
-        panel.querySelector('#vlw_enabled').addEventListener('change', (event) => {
-            settings().enabled = event.target.checked;
-            save();
-            applyVeil();
-        });
+        panel.querySelector('#vlw_enabled').addEventListener('change', (event) => setEnabled(event.target.checked));
         panel.querySelector('#vlw_blur').addEventListener('input', (event) => {
             settings().blur = Number(event.target.value);
             panel.querySelector('#vlw_blur_value').value = `${event.target.value} px`;
@@ -307,6 +369,38 @@
         return true;
     }
 
+    // ───────────────────────────── Палочка ─────────────────────────────
+
+    function addWandItems() {
+        if (document.getElementById('vlw_wand_toggle')) return true;
+        const menu = document.getElementById('extensionsMenu');
+        if (!menu) return false;
+        menu.insertAdjacentHTML('beforeend', `
+            <div id="vlw_wand_toggle" class="list-group-item flex-container flexGap5 interactable vlw-wand-item" tabindex="0" role="listitem">
+                <div class="fa-solid fa-eye-slash extensionsMenuExtensionButton"></div>
+                <span>${TEXT.wandToggle}</span>
+                <input id="vlw_wand_checkbox" type="checkbox" tabindex="-1" aria-hidden="true" ${settings().enabled ? 'checked' : ''}>
+            </div>
+            <div id="vlw_wand_hide_all" class="list-group-item flex-container flexGap5 interactable vlw-wand-item" tabindex="0" role="listitem">
+                <div class="fa-solid fa-eye-low-vision extensionsMenuExtensionButton"></div>
+                <span>${TEXT.wandHideAll}</span>
+            </div>`);
+        const toggle = document.getElementById('vlw_wand_toggle');
+        const hideAllItem = document.getElementById('vlw_wand_hide_all');
+        const onKey = (action) => (event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                action();
+            }
+        };
+        const flip = () => setEnabled(!settings().enabled);
+        toggle.addEventListener('click', flip);
+        toggle.addEventListener('keydown', onKey(flip));
+        hideAllItem.addEventListener('click', hideAll);
+        hideAllItem.addEventListener('keydown', onKey(hideAll));
+        return true;
+    }
+
     // ───────────────────────────── Старт ─────────────────────────────
 
     function init() {
@@ -315,8 +409,9 @@
         applyVeil();
 
         let settingsTimer = null;
-        if (!addSettings()) {
-            settingsTimer = setInterval(() => { if (addSettings()) clearInterval(settingsTimer); }, 500);
+        const mountUi = () => addSettings() & addWandItems();
+        if (!mountUi()) {
+            settingsTimer = setInterval(() => { if (mountUi()) clearInterval(settingsTimer); }, 500);
         }
         window.addEventListener('click', onClickCapture, true);
 
@@ -330,6 +425,7 @@
             document.getElementById(REVEALED_STYLE_ID)?.remove();
             document.querySelectorAll(`.${EYE_CLASS}`).forEach((eye) => eye.remove());
             document.getElementById('vlw_settings')?.remove();
+            document.querySelectorAll('.vlw-wand-item').forEach((item) => item.remove());
             delete window.__veilweaverDispose;
         };
         console.log(`${LOG} готов, вуаль ${settings().enabled ? 'включена' : 'выключена'}.`);
